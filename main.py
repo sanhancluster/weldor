@@ -50,7 +50,7 @@ def word_to_byte(word):
 def get_guess_scores(answer_mask_now):
     key_now = keymap[:, answer_mask_now]
     n_arr = np.apply_along_axis(np.bincount, -1, key_now % 256, minlength=243)
-    scores = -np.sum(n_arr ** 2, axis=-1) + answers.shape[0]**2
+    scores = -np.sum(n_arr ** 2, axis=-1) + answers.shape[0] ** 2
     return scores
 
 
@@ -87,7 +87,6 @@ def hard_mask(word_prv, key_prv, word_mask_now):
     colors = responses_to_color(responses_from_prv, word_prv_byte)
     colors = np.array(colors)
     word_mask_now[word_mask_now] = np.all(color_prv <= colors, axis=-1)
-    return word_mask_now
 
 
 def get_score(word_mask_now, answer_mask_now):
@@ -96,23 +95,26 @@ def get_score(word_mask_now, answer_mask_now):
     score_now = (scores_guess * 256 * 5 + scores_match) * word_mask_now
     return score_now
 
+
 import tqdm
+from joblib import delayed, Parallel
+
 def try_words(n_search, word_mask_now, answer_mask_now):
     score = get_score(word_mask_now, answer_mask_now)
     n_search = np.minimum(n_search, np.sum(word_mask_now))
     trials = np.argsort(score)[::-1][:n_search]
-    scores_trial = []
-    for t in tqdm.tqdm(trials):
+
+    def try_word(t):
         probability = np.bincount(keymap[t, answer_mask_now] % 256, minlength=243)
         score_trial = 0
         for key_trial in np.arange(243).astype('i1')[probability > 0]:
             answer_mask_trial = answer_mask_now & (keymap[t] == key_trial)
-            word_mask_trial = word_mask_now
-            if hard_mode:
-                word_mask_trial = hard_mask(words[t], key, word_mask)
-            score_trial += probability[key_trial] * np.max(get_score(word_mask_trial, answer_mask_trial))
-        scores_trial.append(score_trial)
+            score_trial += probability[key_trial] * np.max(get_guess_scores(answer_mask_trial))
+        return score_trial
+
+    scores_trial = Parallel(n_jobs=4)(delayed(try_word)(t) for t in trials)
     return trials[np.argsort(scores_trial)[::-1]]
+
 
 def round(niter, n_candidates, suggestions):
     print("\n=== Round #%d ===" % niter)
@@ -139,36 +141,36 @@ except FileNotFoundError:
     pickle.dump(keymap, open('keymap.pkl', 'wb'), protocol=4)
 
 hard_mode = True
+n_search = 64
 
-if hard_mode:
-    print("Info: Hard mode is activated.")
-print('=== Wordle solver ver. 1.0 ===')
-print("1. Enter your guess\n"
-      "2. Enter the color of each letter as number\n"
-      "(e.g. 02100 corresponds to 'gray', 'green', 'yellow', 'gray', 'gray')")
-answer_mask = np.full(answers.shape[0], True)
-word_mask = np.full(words.shape[0], True)
-
-niter = 0
-key = 0
-
-n_search = 16
-
-while niter <= 6 and np.sum(answer_mask) > 1:
-    niter += 1
-    score = get_score(word_mask, answer_mask)
-    trials = try_words(n_search, word_mask, answer_mask)
-
-    suggestions = words[trials]
-    #suggestions = words[score == np.max(score)]
-    guess, key = round(niter, np.sum(answer_mask), suggestions)
-
-    w = np.searchsorted(words, guess)
-    answer_mask = answer_mask & (keymap[w] == key)
+if __name__ == "__main__":
     if hard_mode:
-        word_mask = hard_mask(guess, key, word_mask)
+        print("Info: Hard mode is activated.")
+    print('=== Wordle solver ver. 1.0 ===')
+    print("1. Enter your guess\n"
+          "2. Enter the color of each letter as number\n"
+          "(e.g. 02100 corresponds to 'gray', 'green', 'yellow', 'gray', 'gray')")
+    answer_mask = np.full(answers.shape[0], True)
+    word_mask = np.full(words.shape[0], True)
 
-if np.any(answer_mask):
-    print("The answer is: %s" % answers[answer_mask][0])
-else:
-    print("Error.")
+    niter = 0
+    key = 0
+
+    while niter <= 6 and np.sum(answer_mask) > 1:
+        niter += 1
+        score = get_score(word_mask, answer_mask)
+        trials = try_words(n_search, word_mask, answer_mask)
+
+        suggestions = words[trials]
+        #suggestions = words[score == np.max(score)]
+        guess, key = round(niter, np.sum(answer_mask), suggestions)
+
+        w = np.searchsorted(words, guess)
+        answer_mask = answer_mask & (keymap[w] == key)
+        if hard_mode:
+            word_mask = hard_mask(guess, key, word_mask)
+
+    if np.any(answer_mask):
+        print("The answer is: %s" % answers[answer_mask][0])
+    else:
+        print("Error.")
