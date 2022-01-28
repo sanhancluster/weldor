@@ -1,7 +1,6 @@
 import json
 import numpy as np
 import pickle
-import os
 
 answers = np.array(json.load(open('answers.json', 'r')))
 words = np.array(json.load(open('words.json', 'r')))
@@ -12,12 +11,10 @@ words_byte = words_char.view(('i1', 5)) - 97
 answers_char = np.array([bytes(a, 'ascii') for a in answers])
 answers_byte = answers_char.view(('i1', 5)) - 97
 
-def first_occurance(a, v, axis=-1):
-    return np.argmax(a == v, axis=axis)
 
 def guess_responses(words_byte, candidates_byte):
-    words_color = np.zeros(words_byte.shape[:-1]+(26,), 'i1')
-    candidates_color = np.zeros(candidates_byte.shape[:-1]+(26,), 'i1')
+    words_color = np.zeros(words_byte.shape[:-1] + (26,), 'i1')
+    candidates_color = np.zeros(candidates_byte.shape[:-1] + (26,), 'i1')
 
     for w in range(words_byte.shape[0]):
         np.add.at(words_color[w], words_byte[w], 1)
@@ -43,43 +40,95 @@ def guess_responses(words_byte, candidates_byte):
 
     return responses
 
+
 def word_to_byte(word):
     word_char = np.array(bytes(word, 'ascii'))
     word_byte = word_char.view(('i1', 5)) - 97
     return word_byte
 
-def get_guess_scores(key):
-    narr = np.apply_along_axis(np.bincount, -1, key + 128, minlength=256)
-    scores = -np.sum(narr ** 2, axis=-1)
+
+def get_guess_scores(answer_mask_now):
+    key_now = keymap[:, answer_mask_now]
+    n_arr = np.apply_along_axis(np.bincount, -1, key_now % 256, minlength=243)
+    scores = -np.sum(n_arr ** 2, axis=-1) + answers.shape[0]**2
     return scores
 
-def get_match_scores(key):
-    score_from_key = key % 256
+
+def get_match_scores(answer_mask_now):
+    key_now = keymap[:, answer_mask_now]
+    score_from_key = key_now % 256
     score_from_key[score_from_key != 242] = 0
     return np.sum(score_from_key, axis=-1)
 
+
 def number_to_key(number):
-    responses_from_number = np.stack([number // 10**n % 10 for n in range(5)], axis=-1)
-    return np.ravel_multi_index(np.rollaxis(responses_from_number, axis=-1).astype('i1'), (3,)*5).astype('i1')
+    responses_from_number = np.stack([number // 10 ** n % 10 for n in range(5)], axis=-1)
+    return np.ravel_multi_index(np.rollaxis(responses_from_number, axis=-1).astype('i1'), (3,) * 5).astype('i1')
+
 
 def responses_to_key(responses):
-    return np.ravel_multi_index(np.rollaxis(responses, axis=-1).astype('i1')[::-1], (3,)*5).astype('i1')
+    return np.ravel_multi_index(np.rollaxis(responses, axis=-1).astype('i1')[::-1], (3,) * 5).astype('i1')
+
 
 def key_to_responses(key):
-    return np.moveaxis(np.array(np.unravel_index(key % 256, (3,)*5)).astype('i1')[::-1], 0, -1)
+    return np.moveaxis(np.array(np.unravel_index(key % 256, (3,) * 5)).astype('i1')[::-1], 0, -1)
+
 
 def responses_to_color(responses, word_byte):
     colors = np.zeros(responses.shape[:-1] + (26,), 'i1')
     colors[..., word_byte] = responses
     return colors
 
-def hard_mask(word_prv, key_prv):
+
+def hard_mask(word_prv, key_prv, word_mask_now):
     word_prv_byte = word_to_byte(word_prv)
     color_prv = responses_to_color(key_to_responses(key_prv), word_prv_byte)
-    responses_from_prv = guess_responses(np.array([word_prv_byte]), words_byte)[0]
+    responses_from_prv = guess_responses(np.array([word_prv_byte]), words_byte[word_mask_now])[0]
     colors = responses_to_color(responses_from_prv, word_prv_byte)
     colors = np.array(colors)
-    return np.all(color_prv <= colors, axis=-1)
+    word_mask_now[word_mask_now] = np.all(color_prv <= colors, axis=-1)
+    return word_mask_now
+
+
+def get_score(word_mask_now, answer_mask_now):
+    scores_guess = get_guess_scores(answer_mask_now)
+    scores_match = get_match_scores(answer_mask_now)
+    score_now = (scores_guess * 256 * 5 + scores_match) * word_mask_now
+    return score_now
+
+import tqdm
+def try_words(n_search, word_mask_now, answer_mask_now):
+    score = get_score(word_mask_now, answer_mask_now)
+    n_search = np.minimum(n_search, np.sum(word_mask_now))
+    trials = np.argsort(score)[::-1][:n_search]
+    scores_trial = []
+    for t in tqdm.tqdm(trials):
+        probability = np.bincount(keymap[t, answer_mask_now] % 256, minlength=243)
+        score_trial = 0
+        for key_trial in np.arange(243).astype('i1')[probability > 0]:
+            answer_mask_trial = answer_mask_now & (keymap[t] == key_trial)
+            word_mask_trial = word_mask_now
+            if hard_mode:
+                word_mask_trial = hard_mask(words[t], key, word_mask)
+            score_trial += probability[key_trial] * np.max(get_score(word_mask_trial, answer_mask_trial))
+        scores_trial.append(score_trial)
+    return trials[np.argsort(scores_trial)[::-1]]
+
+def round(niter, n_candidates, suggestions):
+    print("\n=== Round #%d ===" % niter)
+    print("Candidates: %d" % n_candidates)
+    print("Suggestions: %s" % suggestions)
+    while True:
+        guess = input('Guess #%d: ' % niter)
+        iw = np.searchsorted(words, guess)
+        if words[iw] == guess:
+            break
+        else:
+            print("Invalid word: %s" % guess)
+    response_str = input('Response #%d: ' % niter)
+    key = number_to_key(int(response_str))
+    return guess, key
+
 
 try:
     keymap = pickle.load(open('keymap.pkl', 'rb'))
@@ -91,44 +140,35 @@ except FileNotFoundError:
 
 hard_mode = True
 
-if(hard_mode):
+if hard_mode:
     print("Info: Hard mode is activated.")
 print('=== Wordle solver ver. 1.0 ===')
 print("1. Enter your guess\n"
       "2. Enter the color of each letter as number\n"
       "(e.g. 02100 corresponds to 'gray', 'green', 'yellow', 'gray', 'gray')")
-mask = np.full(answers.shape[0], True)
-hmask = np.full(words.shape[0], True)
+answer_mask = np.full(answers.shape[0], True)
+word_mask = np.full(words.shape[0], True)
 
-niter = 1
+niter = 0
 key = 0
 
-while niter <= 6 and np.sum(mask)>1:
-    scores_guess = get_guess_scores(keymap[:, mask])
-    scores_match = get_match_scores(keymap[:, mask])
-    score = (scores_guess * 256 * 5 + scores_match)
-    score = (score - np.min(score)) * hmask
-    max_mask = score == np.max(score)
+n_search = 16
 
-    print("\n=== Round #%d ===" % niter)
-    print("Candidates: %d" % np.sum(mask))
-    print("Suggestions: %s" % words[max_mask])
-    while True:
-        guess = input('Guess #%d: ' % niter)
-        iw = np.searchsorted(words, guess)
-        if words[iw] == guess:
-            break
-        else:
-            print("Invalid word: %s" % guess)
-    response_str = input('Response #%d: ' % niter)
-    key = number_to_key(int(response_str))
-    mask = mask & (keymap[np.searchsorted(words, guess)] == key)
-    if hard_mode:
-        hmask = hard_mask(guess, key)
-
+while niter <= 6 and np.sum(answer_mask) > 1:
     niter += 1
+    score = get_score(word_mask, answer_mask)
+    trials = try_words(n_search, word_mask, answer_mask)
 
-if np.any(mask):
-    print("The answer is: %s" % answers[mask][0])
+    suggestions = words[trials]
+    #suggestions = words[score == np.max(score)]
+    guess, key = round(niter, np.sum(answer_mask), suggestions)
+
+    w = np.searchsorted(words, guess)
+    answer_mask = answer_mask & (keymap[w] == key)
+    if hard_mode:
+        word_mask = hard_mask(guess, key, word_mask)
+
+if np.any(answer_mask):
+    print("The answer is: %s" % answers[answer_mask][0])
 else:
     print("Error.")
