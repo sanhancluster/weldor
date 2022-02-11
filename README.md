@@ -1,5 +1,5 @@
 # weldor
-A python solver for Wordle
+A python solver for [Wordle](https://www.nytimes.com/games/wordle)
 
 ## How to use
 1. Enter your guess
