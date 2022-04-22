@@ -1,7 +1,8 @@
+#!/usr/bin/env python3
 import json
 import numpy as np
 import pickle
-import os
+import os, sys, getopt
 
 answers = np.array(json.load(open('answers.json', 'r')))
 words = np.array(json.load(open('words.json', 'r')))
@@ -90,12 +91,22 @@ except FileNotFoundError:
     pickle.dump(keymap, open('keymap.pkl', 'wb'), protocol=4)
 
 hard_mode = True
+try:
+    opts, args = getopt.getopt(sys.argv[1:], "eH",["easy-mode","hard-mode"])
+except getopt.GetoptError:
+    print('main.py <-e> <-H>')
+    sys.exit(2)
+for opt, arg in opts:
+    if(opt in ('-e', '--easy-mode')):
+        hard_mode = False
+    elif(opt in ('-H', '--hard-mode')):
+        hard_mode = True
 
 if(hard_mode):
     print("Info: Hard mode is activated.")
 print('=== Wordle solver ver. 1.0 ===')
 print("1. Enter your guess\n"
-      "2. Enter the color of each letter as number\n"
+      "2. Enter the color of each letter as a number. gray=0, yellow=1 and green=2.\n"
       "(e.g. 02100 corresponds to 'gray', 'green', 'yellow', 'gray', 'gray')")
 mask = np.full(answers.shape[0], True)
 hmask = np.full(words.shape[0], True)
